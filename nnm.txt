@@ -1,0 +1,392 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local Settings = {
+    MonsterESP = true,
+    PlayerESP = true,
+    ShowMonsterName = true,
+    ShowPlayerName = true,
+    ShowPlayerDistance = true
+}
+local MonsterNameScale = 1.2
+local MinScale = 0.3
+local MaxScale = 3
+
+local MonsterHighlights = {}
+local PlayerESPData = {}
+local panelCollapsed = false
+
+-- ===================== 主UI =====================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "ESP_GUI"
+ScreenGui.Parent = PlayerGui
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 999
+
+local BtnHolder = Instance.new("Frame")
+BtnHolder.Size = UDim2.new(0, 110, 0, 360)
+BtnHolder.Position = UDim2.new(0.02, 0, 0.15, 0)
+BtnHolder.BackgroundTransparency = 0.15
+BtnHolder.BackgroundColor3 = Color3.new(0.3,0.3,0.3)
+BtnHolder.ZIndex = 999
+BtnHolder.BorderSizePixel = 2
+BtnHolder.BorderColor3 = Color3.new(0,0,0)
+BtnHolder.Parent = ScreenGui
+
+--折叠时显示的文字
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1,0,1,0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "通用透视"
+TitleLabel.TextColor3 = Color3.new(1,1,1)
+TitleLabel.TextSize = 14
+TitleLabel.Visible = false
+TitleLabel.Parent = BtnHolder
+
+--拖动逻辑
+local dragging = false
+local dragStart = nil
+local startPos = nil
+
+BtnHolder.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = BtnHolder.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+BtnHolder.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        BtnHolder.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+--按钮生成函数，按钮大小固定
+local function MakeButton(YOffset, ButtonColor, TextStr, CallbackFunc)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 95, 0, 38)
+    btn.Position = UDim2.new(0, 7, 0, YOffset)
+    btn.BackgroundColor3 = ButtonColor
+    btn.BorderSizePixel = 2
+    btn.BorderColor3 = Color3.new(1,1,1)
+    btn.Text = TextStr
+    btn.TextSize = 14
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.ZIndex = 1000
+    btn.Active = true
+    btn.Visible = true
+    btn.Parent = BtnHolder
+    btn.Activated:Connect(CallbackFunc)
+    return btn
+end
+
+--创建所有内部按钮
+local buttonsList = {}
+
+--🔴怪物ESP开关
+local RedBtn = MakeButton(5, Color3.new(1,0,0), "怪物ESP", function()
+    Settings.MonsterESP = not Settings.MonsterESP
+    for _,data in pairs(MonsterHighlights) do
+        data.Highlight.Enabled = Settings.MonsterESP
+        data.Billboard.Enabled = Settings.MonsterESP and Settings.ShowMonsterName
+    end
+end)
+table.insert(buttonsList, RedBtn)
+
+--🟢玩家ESP开关
+local GreenBtn = MakeButton(48, Color3.new(0,1,0), "玩家ESP", function()
+    Settings.PlayerESP = not Settings.PlayerESP
+    for _,data in pairs(PlayerESPData) do
+        if data.Highlight then
+            data.Highlight.Enabled = Settings.PlayerESP
+            data.NameTag.Enabled = Settings.PlayerESP and Settings.ShowPlayerName
+            data.DistanceLabel.Visible = Settings.PlayerESP and Settings.ShowPlayerDistance
+        end
+    end
+end)
+table.insert(buttonsList, GreenBtn)
+
+--怪物名字开关
+local MonsterNameBtn = MakeButton(91, Color3.new(0,0,0), "怪物名字", function()
+    Settings.ShowMonsterName = not Settings.ShowMonsterName
+    for _,data in pairs(MonsterHighlights) do
+        data.Billboard.Enabled = Settings.MonsterESP and Settings.ShowMonsterName
+    end
+end)
+table.insert(buttonsList, MonsterNameBtn)
+
+--玩家名字开关
+local PlayerNameBtn = MakeButton(134, Color3.new(0,0,0), "玩家名字", function()
+    Settings.ShowPlayerName = not Settings.ShowPlayerName
+    for _,data in pairs(PlayerESPData) do
+        if data.NameTag then
+            data.NameTag.Enabled = Settings.PlayerESP and Settings.ShowPlayerName
+        end
+    end
+end)
+table.insert(buttonsList, PlayerNameBtn)
+
+--玩家距离开关
+local PlayerDistBtn = MakeButton(177, Color3.new(0,0,0), "玩家距离", function()
+    Settings.ShowPlayerDistance = not Settings.ShowPlayerDistance
+    for _,data in pairs(PlayerESPData) do
+        if data.DistanceLabel then
+            data.DistanceLabel.Visible = Settings.PlayerESP and Settings.ShowPlayerDistance
+        end
+    end
+end)
+table.insert(buttonsList, PlayerDistBtn)
+
+--➕放大怪物名字
+local PlusBtn = MakeButton(220, Color3.new(0,0,0), "名字+", function()
+    MonsterNameScale = math.min(MonsterNameScale + 0.1, MaxScale)
+end)
+table.insert(buttonsList, PlusBtn)
+
+--➖缩小怪物名字
+local MinusBtn = MakeButton(263, Color3.new(0,0,0), "名字-", function()
+    MonsterNameScale = math.max(MonsterNameScale - 0.1, MinScale)
+end)
+table.insert(buttonsList, MinusBtn)
+
+--右上角折叠控制按钮 + / -
+local ControlFrame = Instance.new("Frame")
+ControlFrame.Size = UDim2.new(0, 80, 0, 36)
+ControlFrame.Position = UDim2.new(1, -90, 0.02, 0)
+ControlFrame.BackgroundTransparency = 0.15
+ControlFrame.BackgroundColor3 = Color3.new(0.25,0.25,0.25)
+ControlFrame.BorderSizePixel = 1
+ControlFrame.BorderColor3 = Color3.new(1,1,1)
+ControlFrame.ZIndex = 999
+ControlFrame.Parent = ScreenGui
+
+--更新面板折叠状态
+local function UpdateCollapse()
+    if panelCollapsed then
+        BtnHolder.Size = UDim2.new(0,110,0,30)
+        TitleLabel.Visible = true
+        for _,btn in ipairs(buttonsList) do
+            btn.Visible = false
+        end
+    else
+        BtnHolder.Size = UDim2.new(0,110,0,360)
+        TitleLabel.Visible = false
+        for _,btn in ipairs(buttonsList) do
+            btn.Visible = true
+        end
+    end
+end
+
+--加号：展开面板
+local ExpandBtn = Instance.new("TextButton")
+ExpandBtn.Size = UDim2.new(0,36,0,36)
+ExpandBtn.Position = UDim2.new(0,2,0,0)
+ExpandBtn.BackgroundColor3 = Color3.new(0,0,0)
+ExpandBtn.BorderSizePixel = 1
+ExpandBtn.BorderColor3 = Color3.new(1,1,1)
+ExpandBtn.Text = "+"
+ExpandBtn.TextSize = 20
+ExpandBtn.TextColor3 = Color3.new(1,1,1)
+ExpandBtn.ZIndex = 1000
+ExpandBtn.Parent = ControlFrame
+ExpandBtn.Activated:Connect(function()
+    panelCollapsed = false
+    UpdateCollapse()
+end)
+
+--减号：折叠面板成一条杠
+local CollapseBtn = Instance.new("TextButton")
+CollapseBtn.Size = UDim2.new(0,36,0,36)
+CollapseBtn.Position = UDim2.new(0,42,0,0)
+CollapseBtn.BackgroundColor3 = Color3.new(0,0,0)
+CollapseBtn.BorderSizePixel = 1
+CollapseBtn.BorderColor3 = Color3.new(1,1,1)
+CollapseBtn.Text = "-"
+CollapseBtn.TextSize = 20
+CollapseBtn.TextColor3 = Color3.new(1,1,1)
+CollapseBtn.ZIndex = 1000
+CollapseBtn.Parent = ControlFrame
+CollapseBtn.Activated:Connect(function()
+    panelCollapsed = true
+    UpdateCollapse()
+end)
+
+UpdateCollapse()
+
+-- ===================== 怪物ESP创建 =====================
+local function GetMonsterESP(model)
+    if MonsterHighlights[model] then
+        return MonsterHighlights[model]
+    end
+    local data = {}
+    local hl = Instance.new("Highlight")
+    hl.FillTransparency = 0.4
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Enabled = Settings.MonsterESP
+    hl.Parent = model
+    data.Highlight = hl
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0,120 * MonsterNameScale,0,30 * MonsterNameScale)
+    billboard.StudsOffset = Vector3.new(0,4,0)
+    billboard.AlwaysOnTop = true
+    billboard.Enabled = Settings.MonsterESP and Settings.ShowMonsterName
+    billboard.Parent = model
+    data.Billboard = billboard
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1,0,1,0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = model.Name
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextStrokeColor3 = Color3.new(0,0,0)
+    nameLabel.TextScaled = true
+    nameLabel.Parent = billboard
+    data.NameLabel = nameLabel
+
+    MonsterHighlights[model] = data
+    model.Destroying:Connect(function()
+        pcall(function()
+            hl:Destroy()
+            billboard:Destroy()
+        end)
+        MonsterHighlights[model] = nil
+    end)
+    return data
+end
+
+-- ===================== 玩家ESP创建（带距离） =====================
+local function RefreshPlayerESP(player)
+    local char = player.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local data = PlayerESPData[char]
+    if data then
+        return data
+    end
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = Color3.new(0,1,0)
+    highlight.FillTransparency = 0.4
+    highlight.OutlineTransparency = 0
+    highlight.OutlineColor = Color3.new(0,1,0)
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Enabled = Settings.PlayerESP
+    highlight.Parent = char
+
+    local nameTag = Instance.new("BillboardGui")
+    nameTag.AlwaysOnTop = true
+    nameTag.LightInfluence = 0
+    nameTag.Size = UDim2.new(0,160,0,40)
+    nameTag.StudsOffset = Vector3.new(0,7,0)
+    nameTag.Enabled = Settings.PlayerESP and Settings.ShowPlayerName
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Text = player.Name
+    nameLabel.Font = Enum.Font.SourceSansBold
+    nameLabel.TextSize = 22
+    nameLabel.TextColor3 = Color3.new(0,1,0)
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextStrokeColor3 = Color3.new(0,0,0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Size = UDim2.new(1,0,0.5,0)
+    nameLabel.Parent = nameTag
+
+    local distanceLabel = Instance.new("TextLabel")
+    distanceLabel.Font = Enum.Font.SourceSans
+    distanceLabel.TextSize = 18
+    distanceLabel.TextColor3 = Color3.new(1,1,1)
+    distanceLabel.TextStrokeTransparency = 0
+    distanceLabel.TextStrokeColor3 = Color3.new(0,0,0)
+    distanceLabel.BackgroundTransparency = 1
+    distanceLabel.Size = UDim2.new(1,0,0.5,0)
+    distanceLabel.Position = UDim2.new(0,0,0.5,0)
+    distanceLabel.Visible = Settings.PlayerESP and Settings.ShowPlayerDistance
+    distanceLabel.Parent = nameTag
+
+    nameTag.Parent = char
+    PlayerESPData[char] = {
+        Highlight = highlight,
+        NameTag = nameTag,
+        NameLabel = nameLabel,
+        DistanceLabel = distanceLabel
+    }
+    char.Destroying:Connect(function()
+        pcall(function()
+            highlight:Destroy()
+            nameTag:Destroy()
+        end)
+        PlayerESPData[char] = nil
+    end)
+    return data
+end
+
+-- ===================== 主循环 =====================
+RunService.Heartbeat:Connect(function()
+    local myChar = LocalPlayer.Character
+    if not myChar then return end
+    local myRoot = myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+
+    --怪物扫描更新
+    local allModels = Workspace:GetDescendants()
+    for _,obj in ipairs(allModels) do
+        if obj:IsA("Model") then
+            local hum = obj:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 and hum.RootPart then
+                local isPlayer = false
+                for _,plr in ipairs(Players:GetPlayers()) do
+                    if plr.Character == obj then
+                        isPlayer = true
+                        break
+                    end
+                end
+                if not isPlayer then
+                    local data = GetMonsterESP(obj)
+                    data.Billboard.Size = UDim2.new(0,120 * MonsterNameScale,0,30 * MonsterNameScale)
+                    if obj.Name == "Kus" then
+                        data.Highlight.FillColor = Color3.new(0,0,1)
+                        data.Highlight.OutlineColor = Color3.new(0,0,1)
+                        data.NameLabel.TextColor3 = Color3.new(0,0,1)
+                    else
+                        data.Highlight.FillColor = Color3.new(1,0,0)
+                        data.Highlight.OutlineColor = Color3.new(1,0,0)
+                        data.NameLabel.TextColor3 = Color3.new(1,0,0)
+                    end
+                    data.NameLabel.Text = obj.Name
+                    data.Highlight.Enabled = Settings.MonsterESP
+                    data.Billboard.Enabled = Settings.MonsterESP and Settings.ShowMonsterName
+                end
+            end
+        end
+    end
+
+    --玩家扫描 + 距离更新
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local data = RefreshPlayerESP(p)
+            if data and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                local dist = (myRoot.Position - p.Character.HumanoidRootPart.Position).Magnitude
+                data.DistanceLabel.Text = string.format("Dist: %.1f", dist)
+                data.Highlight.Enabled = Settings.PlayerESP
+                data.NameTag.Enabled = Settings.PlayerESP and Settings.ShowPlayerName
+                data.DistanceLabel.Visible = Settings.PlayerESP and Settings.ShowPlayerDistance
+            end
+        end
+    end
+end)
